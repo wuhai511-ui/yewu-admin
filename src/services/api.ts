@@ -1,8 +1,13 @@
 import axios from 'axios';
 import type { ApiResponse } from '../types';
 
+// 生产环境使用实际后端地址，开发环境使用代理
+const baseURL = import.meta.env.PROD
+  ? 'http://47.253.226.91:3000/api/v1'
+  : '/api/v1';
+
 const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',

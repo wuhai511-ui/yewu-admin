@@ -67,3 +67,42 @@ export interface AIQueryResult {
   confidence: number;
   llm: string;
 }
+
+// 文件附件类型
+export interface FileAttachment {
+  id: string;
+  name: string;
+  type: 'business' | 'channel';  // 业务系统数据 / 支付渠道数据
+  fileType: 'JY' | 'JS' | 'SEP'; // 交易明细/结算明细/代付明细
+  status: 'uploading' | 'success' | 'error';
+  records?: number;
+  size?: number;
+}
+
+// AI聊天消息
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sql?: string;
+  timestamp: Date;
+  attachments?: FileAttachment[];
+}
+
+// 文件识别结果
+export interface FileRecognitionResult {
+  data_type: 'business' | 'channel';
+  file_type: 'JY' | 'JS' | 'SEP';
+  records: number;
+  preview?: Record<string, unknown>[];
+  confidence: number;
+}
+
+// 文件上传结果
+export interface AIFileUploadResult {
+  file_id: string;
+  data_type: 'business' | 'channel';
+  file_type: 'JY' | 'JS' | 'SEP';
+  records: number;
+  message: string;
+}
