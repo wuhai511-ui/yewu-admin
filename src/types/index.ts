@@ -73,7 +73,7 @@ export interface FileAttachment {
   id: string;
   name: string;
   type: 'business' | 'channel';  // 业务系统数据 / 支付渠道数据
-  fileType: 'JY' | 'JS' | 'SEP'; // 交易明细/结算明细/代付明细
+  fileType: 'JY' | 'JS' | 'SEP' | 'INVOICE'; // 交易明细/结算明细/代付明细/电子发票
   status: 'uploading' | 'success' | 'error';
   records?: number;
   size?: number;
@@ -92,7 +92,7 @@ export interface ChatMessage {
 // 文件识别结果
 export interface FileRecognitionResult {
   data_type: 'business' | 'channel';
-  file_type: 'JY' | 'JS' | 'SEP';
+  file_type: 'JY' | 'JS' | 'SEP' | 'INVOICE';
   records: number;
   preview?: Record<string, unknown>[];
   confidence: number;
@@ -102,7 +102,14 @@ export interface FileRecognitionResult {
 export interface AIFileUploadResult {
   file_id: string;
   data_type: 'business' | 'channel';
-  file_type: 'JY' | 'JS' | 'SEP';
+  file_type: 'JY' | 'JS' | 'SEP' | 'INVOICE';
   records: number;
   message: string;
+}
+
+// 批量上传结果
+export interface BatchUploadResult {
+  success: number;
+  failed: number;
+  results: AIFileUploadResult[];
 }

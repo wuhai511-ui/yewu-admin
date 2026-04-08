@@ -1,5 +1,5 @@
 import api from './api';
-import type { ApiResponse, AIQueryResult, FileRecognitionResult, AIFileUploadResult } from '../types';
+import type { ApiResponse, AIQueryResult, FileRecognitionResult, AIFileUploadResult, BatchUploadResult } from '../types';
 
 export const aiApi = {
   query: async (question: string, merchantId?: string): Promise<AIQueryResult> => {
@@ -32,7 +32,7 @@ export const aiApi = {
   uploadReconciliationFile: async (
     file: File,
     dataType: 'business' | 'channel',
-    fileType: 'JY' | 'JS' | 'SEP'
+    fileType: 'JY' | 'JS' | 'SEP' | 'INVOICE'
   ): Promise<AIFileUploadResult> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -40,6 +40,25 @@ export const aiApi = {
     formData.append('file_type', fileType);
 
     const response = await api.post<ApiResponse<AIFileUploadResult>>('/ai/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data.data;
+  },
+
+  // 批量上传文件
+  uploadBatch: async (
+    files: File[],
+    dataType: 'business' | 'channel',
+    fileType: 'JY' | 'JS' | 'SEP' | 'INVOICE'
+  ): Promise<BatchUploadResult> => {
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    formData.append('data_type', dataType);
+    formData.append('file_type', fileType);
+
+    const response = await api.post<ApiResponse<BatchUploadResult>>('/ai/upload/batch', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },

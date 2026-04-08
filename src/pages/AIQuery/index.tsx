@@ -12,21 +12,26 @@ const AIQuery: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [recognitionResult, setRecognitionResult] = useState<FileRecognitionResult | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [recognitionResults, setRecognitionResults] = useState<FileRecognitionResult[]>([]);
   const [selectedDataType, setSelectedDataType] = useState<'business' | 'channel'>('channel');
-  const [selectedFileType, setSelectedFileType] = useState<'JY' | 'JS' | 'SEP'>('JY');
+  const [selectedFileType, setSelectedFileType] = useState<'JY' | 'JS' | 'SEP' | 'INVOICE'>('JY');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // 文件识别
+  // 文件识别（支持批量）
   const recognizeMutation = useMutation({
-    mutationFn: (file: File) => aiApi.recognizeFile(file),
-    onSuccess: (data) => {
-      setRecognitionResult(data);
-      setSelectedDataType(data.data_type);
-      setSelectedFileType(data.file_type);
+    mutationFn: async (files: File[]) => {
+      const results = await Promise.all(files.map(file => aiApi.recognizeFile(file)));
+      return results;
+    },
+    onSuccess: (results) => {
+      setRecognitionResults(results);
+      if (results.length > 0) {
+        setSelectedDataType(results[0].data_type);
+        setSelectedFileType(results[0].file_type);
+      }
       setConfirmModalVisible(true);
     },
     onError: (error) => {
@@ -34,39 +39,46 @@ const AIQuery: React.FC = () => {
     },
   });
 
-  // 文件上传
+  // 文件上传（支持批量）
   const uploadMutation = useMutation({
-    mutationFn: ({ file, dataType, fileType }: { file: File; dataType: 'business' | 'channel'; fileType: 'JY' | 'JS' | 'SEP' }) =>
-      aiApi.uploadReconciliationFile(file, dataType, fileType),
-    onSuccess: (data) => {
-      const attachment: FileAttachment = {
+    mutationFn: async ({ files, dataType, fileType }: { files: File[]; dataType: 'business' | 'channel'; fileType: 'JY' | 'JS' | 'SEP' | 'INVOICE' }) => {
+      const results = await Promise.all(
+        files.map(file => aiApi.uploadReconciliationFile(file, dataType, fileType))
+      );
+      return results;
+    },
+    onSuccess: (results) => {
+      const attachments: FileAttachment[] = results.map((data, index) => ({
         id: data.file_id,
-        name: pendingFile?.name || 'unknown',
+        name: pendingFiles[index]?.name || 'unknown',
         type: data.data_type,
         fileType: data.file_type,
-        status: 'success',
+        status: 'success' as const,
         records: data.records,
-      };
+      }));
+
+      const totalRecords = results.reduce((sum, r) => sum + r.records, 0);
+      const fileNames = pendingFiles.map(f => f.name).join('、');
 
       // 添加用户消息
       const userMessage: ChatMessage = {
         id: Date.now().toString(),
         role: 'user',
-        content: `上传了对账文件`,
+        content: `上传了 ${pendingFiles.length} 个对账文件`,
         timestamp: new Date(),
-        attachments: [attachment],
+        attachments,
       };
 
       // 添加AI回复
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data.message || `✓ 文件上传成功！共 ${data.records} 条${data.file_type === 'JY' ? '交易明细' : data.file_type === 'JS' ? '结算明细' : '代付明细'}记录。\n\n您可以继续上传另一方的数据进行对账，或执行其他操作。`,
+        content: `✓ 批量上传成功！共 ${pendingFiles.length} 个文件，${totalRecords} 条记录。\n\n文件：${fileNames}`,
         timestamp: new Date(),
       };
 
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
-      message.success('文件上传成功');
+      message.success(`成功上传 ${pendingFiles.length} 个文件`);
       handleCloseConfirmModal();
     },
     onError: (error) => {
@@ -98,25 +110,31 @@ const AIQuery: React.FC = () => {
     },
   });
 
-  // 处理文件选择
-  const handleFileSelect = useCallback((file: File) => {
-    const isValidType = ['text/plain', 'text/csv', 'application/octet-stream'].includes(file.type) ||
-      file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.dat');
+  // 处理文件选择（支持批量）
+  const handleFileSelect = useCallback((files: File[]) => {
+    const validFiles = files.filter(file => {
+      const isValidType = ['text/plain', 'text/csv', 'application/octet-stream', 'application/pdf', 'image/png', 'image/jpeg'].includes(file.type) ||
+        file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.dat') ||
+        file.name.endsWith('.pdf') || file.name.endsWith('.png') || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg');
 
-    if (!isValidType) {
-      message.error('只支持 .txt, .csv, .dat 格式的文件');
-      return;
-    }
+      if (!isValidType) {
+        message.error(`${file.name} 格式不支持`);
+        return false;
+      }
+      return true;
+    });
 
-    setPendingFile(file);
-    recognizeMutation.mutate(file);
+    if (validFiles.length === 0) return;
+
+    setPendingFiles(validFiles);
+    recognizeMutation.mutate(validFiles);
   }, [recognizeMutation]);
 
   // 确认上传
   const handleConfirmUpload = () => {
-    if (!pendingFile) return;
+    if (pendingFiles.length === 0) return;
     uploadMutation.mutate({
-      file: pendingFile,
+      files: pendingFiles,
       dataType: selectedDataType,
       fileType: selectedFileType,
     });
@@ -125,8 +143,8 @@ const AIQuery: React.FC = () => {
   // 关闭确认弹窗
   const handleCloseConfirmModal = () => {
     setConfirmModalVisible(false);
-    setPendingFile(null);
-    setRecognitionResult(null);
+    setPendingFiles([]);
+    setRecognitionResults([]);
   };
 
   // 发送消息
@@ -172,9 +190,9 @@ const AIQuery: React.FC = () => {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      handleFileSelect(file);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      handleFileSelect(files);
     }
   }, [handleFileSelect]);
 
@@ -313,12 +331,13 @@ const AIQuery: React.FC = () => {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".txt,.csv,.dat"
+            accept=".txt,.csv,.dat,.pdf,.png,.jpg,.jpeg"
+            multiple
             style={{ display: 'none' }}
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) {
-                handleFileSelect(file);
+              const files = Array.from(e.target.files || []);
+              if (files.length > 0) {
+                handleFileSelect(files);
               }
               e.target.value = '';
             }}
@@ -367,23 +386,33 @@ const AIQuery: React.FC = () => {
 
       {/* 文件确认弹窗 */}
       <Modal
-        title="确认文件信息"
+        title={`确认文件信息 (${pendingFiles.length} 个文件)`}
         open={confirmModalVisible}
         onCancel={handleCloseConfirmModal}
         footer={null}
-        width={500}
+        width={600}
       >
         <div style={{ padding: '16px 0' }}>
-          <Paragraph>
-            <FileTextOutlined style={{ marginRight: 8 }} />
-            文件名：<Text strong>{pendingFile?.name}</Text>
-          </Paragraph>
+          {/* 文件列表 */}
+          <div style={{ marginBottom: 16, maxHeight: 200, overflow: 'auto' }}>
+            {pendingFiles.map((file, index) => (
+              <Paragraph key={index} style={{ marginBottom: 4 }}>
+                <FileTextOutlined style={{ marginRight: 8 }} />
+                {file.name}
+                {recognitionResults[index] && (
+                  <Tag color={recognitionResults[index].confidence > 0.8 ? 'green' : 'orange'} style={{ marginLeft: 8 }}>
+                    {recognitionResults[index].records} 条
+                  </Tag>
+                )}
+              </Paragraph>
+            ))}
+          </div>
 
           <div style={{ marginBottom: 16 }}>
             <Text type="secondary">AI识别结果：</Text>
-            {recognitionResult && (
-              <Tag color={recognitionResult.confidence > 0.8 ? 'green' : 'orange'}>
-                置信度 {Math.round(recognitionResult.confidence * 100)}%
+            {recognitionResults.length > 0 && (
+              <Tag color={recognitionResults[0].confidence > 0.8 ? 'green' : 'orange'}>
+                置信度 {Math.round(recognitionResults[0].confidence * 100)}%
               </Tag>
             )}
           </div>
@@ -411,13 +440,14 @@ const AIQuery: React.FC = () => {
                 { value: 'JY', label: 'JY - 交易明细' },
                 { value: 'JS', label: 'JS - 结算明细' },
                 { value: 'SEP', label: 'SEP - 代付明细' },
+                { value: 'INVOICE', label: 'INVOICE - 电子发票' },
               ]}
             />
           </div>
 
-          {recognitionResult && (
+          {recognitionResults.length > 0 && (
             <Paragraph type="secondary">
-              识别记录数：<Text strong>{recognitionResult.records}</Text> 条
+              总记录数：<Text strong>{recognitionResults.reduce((sum, r) => sum + r.records, 0)}</Text> 条
             </Paragraph>
           )}
 
