@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Merchants from './pages/Merchants';
 import Transactions from './pages/Transactions';
 import Reconciliation from './pages/Reconciliation';
+import Invoices from './pages/Invoices';
 import AIQuery from './pages/AIQuery';
 
 const App: React.FC = () => {
@@ -26,6 +27,7 @@ const App: React.FC = () => {
           <Route path="merchants" element={<Merchants />} />
           <Route path="transactions" element={<Transactions />} />
           <Route path="reconciliation" element={<Reconciliation />} />
+          <Route path="invoices" element={<Invoices />} />
           <Route path="ai-query" element={<AIQuery />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
