@@ -11,15 +11,18 @@ export interface FileInfo {
   id: string;
   filename: string;
   type: string;
-  status: string;
+  source: string;
   records: number;
-  created_at: string;
+  createdAt: string;
 }
 
 export const fileApi = {
-  upload: async (file: File): Promise<FileUploadResult> => {
+  upload: async (file: File, fileType?: string): Promise<FileUploadResult> => {
     const formData = new FormData();
     formData.append('file', file);
+    if (fileType) {
+      formData.append('file_type', fileType);
+    }
 
     const response = await api.post<ApiResponse<FileUploadResult>>('/files/upload', formData, {
       headers: {

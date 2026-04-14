@@ -1,26 +1,60 @@
 import React, { useState } from 'react';
-import { Table, Card, Tag, Button, DatePicker, Space, Progress, Modal, Descriptions, Upload, message } from 'antd';
+import { Table, Card, Tag, Button, DatePicker, Space, Modal, Descriptions, Upload, message, Select } from 'antd';
 import { SyncOutlined, EyeOutlined, UploadOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fileApi } from '../../services/file';
+import { reconciliationApi, type ReconciliationBatch } from '../../services/reconciliation';
+
+type UploadFileType = 'BUSINESS_ORDER' | 'JY' | 'JS' | 'SEP';
 
 const Reconciliation: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(dayjs().subtract(1, 'day').format('YYYY-MM-DD'));
   const [detailVisible, setDetailVisible] = useState(false);
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
+  const [selectedBatch, setSelectedBatch] = useState<ReconciliationBatch | null>(null);
+  const [uploadFileType, setUploadFileType] = useState<UploadFileType>('BUSINESS_ORDER');
   const queryClient = useQueryClient();
 
+  // 查询对账批次列表
+  const { data: batchData, isLoading: batchLoading } = useQuery({
+    queryKey: ['reconciliation-batches'],
+    queryFn: () => reconciliationApi.list({ pageSize: 100 }),
+  });
+
   // 查询文件列表
-  const { data: files = [], isLoading } = useQuery({
+  const { data: files = [], isLoading: filesLoading } = useQuery({
     queryKey: ['files', selectedDate],
     queryFn: () => fileApi.list({ pageSize: 100 }),
   });
 
+  // 执行对账
+  const executeMutation = useMutation({
+    mutationFn: (batchId: string) => reconciliationApi.execute(batchId),
+    onSuccess: (data) => {
+      message.success(`对账完成！匹配: ${data.stats.match}, 滚动: ${data.stats.rolling}, 长款: ${data.stats.long}, 短款: ${data.stats.short}, 金额差异: ${data.stats.amount_diff}`);
+      queryClient.invalidateQueries({ queryKey: ['reconciliation-batches'] });
+    },
+    onError: (error) => {
+      message.error(`对账失败：${(error as Error).message}`);
+    },
+  });
+
+  // 创建对账批次
+  const createBatchMutation = useMutation({
+    mutationFn: () => reconciliationApi.create({ batch_type: 'ORDER_VS_JY', check_date: selectedDate }),
+    onSuccess: (batch) => {
+      executeMutation.mutate(batch.id);
+    },
+    onError: (error) => {
+      message.error(`创建批次失败：${(error as Error).message}`);
+    },
+  });
+
   // 文件上传
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => fileApi.upload(file),
+    mutationFn: ({ file, fileType }: { file: File; fileType: UploadFileType }) => fileApi.upload(file, fileType),
     onSuccess: (data) => {
       message.success(`文件上传成功，解析出 ${data.records} 条记录`);
       setUploadModalVisible(false);
@@ -34,87 +68,82 @@ const Reconciliation: React.FC = () => {
   const uploadProps: UploadProps = {
     beforeUpload: (file) => {
       const isValidType = ['text/plain', 'text/csv', 'application/octet-stream'].includes(file.type) ||
-        file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.dat');
+        file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.dat') ||
+        file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
 
       if (!isValidType) {
-        message.error('只支持 .txt, .csv, .dat 格式的文件');
+        message.error('只支持 .txt, .csv, .dat, .xlsx, .xls 格式的文件');
         return false;
       }
 
-      uploadMutation.mutate(file);
+      uploadMutation.mutate({ file, fileType: uploadFileType });
       return false;
     },
     showUploadList: false,
-    accept: '.txt,.csv,.dat',
+    accept: '.txt,.csv,.dat,.xlsx,.xls',
   };
 
-  const mockData = [
-    {
-      key: '1',
-      batch_id: 'BATCH20260407001',
-      check_date: '2026-04-07',
-      file_type: 'JY',
-      record_count: 156,
-      match_count: 153,
-      mismatch_count: 3,
-      status: 1,
-    },
-    {
-      key: '2',
-      batch_id: 'BATCH20260407002',
-      check_date: '2026-04-07',
-      file_type: 'JS',
-      record_count: 148,
-      match_count: 148,
-      mismatch_count: 0,
-      status: 1,
-    },
-    {
-      key: '3',
-      batch_id: 'BATCH20260407003',
-      check_date: '2026-04-07',
-      file_type: 'SEP',
-      record_count: 89,
-      match_count: 87,
-      mismatch_count: 2,
-      status: 1,
-    },
-  ];
+  const statusMap: Record<number, { label: string; color: string }> = {
+    0: { label: '待处理', color: 'default' },
+    1: { label: '处理中', color: 'processing' },
+    2: { label: '完成', color: 'success' },
+    3: { label: '失败', color: 'error' },
+  };
 
-  const columns = [
-    { title: '批次号', dataIndex: 'batch_id', key: 'batch_id' },
+  const batchColumns = [
+    { title: '批次号', dataIndex: 'batch_no', key: 'batch_no' },
     { title: '对账日期', dataIndex: 'check_date', key: 'check_date' },
-    { title: '文件类型', dataIndex: 'file_type', key: 'file_type' },
+    { title: '类型', dataIndex: 'batch_type', key: 'batch_type' },
     { title: '记录数', dataIndex: 'record_count', key: 'record_count' },
-    { title: '匹配数', dataIndex: 'match_count', key: 'match_count' },
+    { title: '对平', dataIndex: 'match_count', key: 'match_count' },
     {
-      title: '差异',
-      dataIndex: 'mismatch_count',
-      key: 'mismatch_count',
-      render: (v: number) => <Tag color={v > 0 ? 'orange' : 'green'}>{v}</Tag>,
+      title: '滚动',
+      key: 'rolling_count',
+      render: (_: unknown, record: ReconciliationBatch) => record.rolling_count,
     },
     {
-      title: '匹配率',
-      key: 'match_rate',
-      render: (_: unknown, record: { record_count: number; match_count: number }) => {
-        const rate = record.record_count > 0 ? (record.match_count / record.record_count) * 100 : 0;
-        return <Progress percent={rate} size="small" status={rate === 100 ? 'success' : 'normal'} />;
+      title: '长款',
+      key: 'long_count',
+      render: (_: unknown, record: ReconciliationBatch) => <Tag color="blue">{record.long_count}</Tag>,
+    },
+    {
+      title: '短款',
+      key: 'short_count',
+      render: (_: unknown, record: ReconciliationBatch) => <Tag color="orange">{record.short_count}</Tag>,
+    },
+    {
+      title: '金额差异',
+      key: 'amount_diff_count',
+      render: (_: unknown, record: ReconciliationBatch) => <Tag color="red">{record.amount_diff_count}</Tag>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      render: (status: number) => {
+        const config = statusMap[status] || { label: '未知', color: 'default' };
+        return <Tag color={config.color}>{config.label}</Tag>;
       },
     },
     {
       title: '操作',
       key: 'action',
-      render: () => (
+      render: (_: unknown, record: ReconciliationBatch) => (
         <Space>
-          <Button type="link" icon={<EyeOutlined />} onClick={() => setDetailVisible(true)}>
+          <Button type="link" icon={<EyeOutlined />} onClick={() => { setSelectedBatch(record); setDetailVisible(true); }}>
             详情
           </Button>
+          {record.status === 0 && (
+            <Button type="link" icon={<SyncOutlined />} onClick={() => executeMutation.mutate(record.id)}>
+              执行
+            </Button>
+          )}
         </Space>
       ),
     },
   ];
 
-  // 文件列表表格列
+  // 文件列表表格列（修正字段名）
   const fileColumns = [
     { title: '文件名', dataIndex: 'filename', key: 'filename' },
     {
@@ -126,6 +155,7 @@ const Reconciliation: React.FC = () => {
           JY: { label: '交易明细', color: 'blue' },
           JS: { label: '结算明细', color: 'green' },
           SEP: { label: '代付明细', color: 'purple' },
+          BUSINESS_ORDER: { label: '业务订单', color: 'cyan' },
         };
         const config = typeMap[type] || { label: type, color: 'default' };
         return <Tag color={config.color}>{config.label}</Tag>;
@@ -133,20 +163,25 @@ const Reconciliation: React.FC = () => {
     },
     { title: '记录数', dataIndex: 'records', key: 'records' },
     {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status: string) => (
-        <Tag color={status === 'processed' ? 'success' : 'processing'}>{status}</Tag>
-      ),
+      title: '来源',
+      dataIndex: 'source',
+      key: 'source',
+      render: (source: string) => {
+        const sourceMap: Record<string, string> = { sftp: 'SFTP', upload: '上传', api: 'API' };
+        return sourceMap[source] || source;
+      },
     },
     {
       title: '上传时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      render: (time: string) => dayjs(time).format('YYYY-MM-DD HH:mm:ss'),
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (time: string) => time ? dayjs(time).format('YYYY-MM-DD HH:mm:ss') : '-',
     },
   ];
+
+  const handleExecute = () => {
+    createBatchMutation.mutate();
+  };
 
   return (
     <div>
@@ -157,7 +192,12 @@ const Reconciliation: React.FC = () => {
             value={dayjs(selectedDate)}
             onChange={(date) => setSelectedDate(date?.format('YYYY-MM-DD') || '')}
           />
-          <Button type="primary" icon={<SyncOutlined />}>
+          <Button
+            type="primary"
+            icon={<SyncOutlined />}
+            onClick={handleExecute}
+            loading={createBatchMutation.isPending || executeMutation.isPending}
+          >
             执行对账
           </Button>
           <Button icon={<UploadOutlined />} onClick={() => setUploadModalVisible(true)}>
@@ -172,7 +212,7 @@ const Reconciliation: React.FC = () => {
           <Table
             columns={fileColumns}
             dataSource={files.map((f, i) => ({ ...f, key: f.id || i }))}
-            loading={isLoading}
+            loading={filesLoading}
             pagination={false}
             size="small"
           />
@@ -180,7 +220,12 @@ const Reconciliation: React.FC = () => {
       )}
 
       <Card title="对账批次">
-        <Table columns={columns} dataSource={mockData} pagination={false} />
+        <Table
+          columns={batchColumns}
+          dataSource={batchData?.list.map((b, i) => ({ ...b, key: b.id || i }))}
+          loading={batchLoading}
+          pagination={false}
+        />
       </Card>
 
       {/* 文件上传弹窗 */}
@@ -192,14 +237,28 @@ const Reconciliation: React.FC = () => {
         width={500}
       >
         <div style={{ padding: '24px 0' }}>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 8 }}>文件类型</div>
+            <Select<UploadFileType>
+              value={uploadFileType}
+              onChange={setUploadFileType}
+              style={{ width: '100%' }}
+              options={[
+                { value: 'BUSINESS_ORDER', label: '业务订单' },
+                { value: 'JY', label: '交易明细' },
+                { value: 'JS', label: '结算明细' },
+                { value: 'SEP', label: '代付明细' },
+              ]}
+            />
+          </div>
           <Upload.Dragger {...uploadProps} disabled={uploadMutation.isPending}>
             <p className="ant-upload-drag-icon">
               <UploadOutlined style={{ fontSize: 48, color: '#1890ff' }} />
             </p>
             <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
             <p className="ant-upload-hint">
-              支持格式：.txt, .csv, .dat<br />
-              文件类型：JY（交易明细）、JS（结算明细）、SEP（代付明细）
+              支持格式：.txt, .csv, .dat, .xlsx, .xls<br />
+              文件类型：业务订单、JY（交易明细）、JS（结算明细）、SEP（代付明细）
             </p>
           </Upload.Dragger>
           {uploadMutation.isPending && (
@@ -214,18 +273,24 @@ const Reconciliation: React.FC = () => {
       <Modal
         title="对账详情"
         open={detailVisible}
-        onCancel={() => setDetailVisible(false)}
+        onCancel={() => { setDetailVisible(false); setSelectedBatch(null); }}
         footer={null}
         width={800}
       >
-        <Descriptions column={2} bordered>
-          <Descriptions.Item label="批次号">BATCH20260407001</Descriptions.Item>
-          <Descriptions.Item label="对账日期">2026-04-07</Descriptions.Item>
-          <Descriptions.Item label="文件类型">JY（交易明细）</Descriptions.Item>
-          <Descriptions.Item label="记录数">156</Descriptions.Item>
-          <Descriptions.Item label="匹配数">153</Descriptions.Item>
-          <Descriptions.Item label="差异数">3</Descriptions.Item>
-        </Descriptions>
+        {selectedBatch && (
+          <Descriptions column={2} bordered>
+            <Descriptions.Item label="批次号">{selectedBatch.batch_no}</Descriptions.Item>
+            <Descriptions.Item label="对账日期">{selectedBatch.check_date}</Descriptions.Item>
+            <Descriptions.Item label="类型">{selectedBatch.batch_type}</Descriptions.Item>
+            <Descriptions.Item label="状态">{statusMap[selectedBatch.status]?.label}</Descriptions.Item>
+            <Descriptions.Item label="记录数">{selectedBatch.record_count}</Descriptions.Item>
+            <Descriptions.Item label="对平">{selectedBatch.match_count}</Descriptions.Item>
+            <Descriptions.Item label="滚动匹配">{selectedBatch.rolling_count}</Descriptions.Item>
+            <Descriptions.Item label="长款">{selectedBatch.long_count}</Descriptions.Item>
+            <Descriptions.Item label="短款">{selectedBatch.short_count}</Descriptions.Item>
+            <Descriptions.Item label="金额差异">{selectedBatch.amount_diff_count}</Descriptions.Item>
+          </Descriptions>
+        )}
       </Modal>
     </div>
   );
